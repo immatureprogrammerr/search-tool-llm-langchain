@@ -1,150 +1,157 @@
+import streamlit as st
 import os
-import pickle
 import time
-from dash import Dash, html, dcc, State
-import dash_bootstrap_components as dbc
-from dash.dependencies import Input, Output
-from langchain import OpenAI
+from langchain_community.llms import OpenAI
 from langchain.chains import RetrievalQAWithSourcesChain
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.document_loaders import UnstructuredURLLoader
+from langchain_community.document_loaders import UnstructuredURLLoader
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 
 from dotenv import load_dotenv
+load_dotenv()  # take environment variables from .env (especially openai api key)
 
-loadenv = load_dotenv()
-
-NUMBER_OF_INPUTS = 3
-
-SIDEBAR_STYLE = {
-    "position": "fixed",
-    "top": 0,
-    "left": 0,
-    "bottom": 0,
-    "width": "12em",
-    "padding": "2rem 1rem",
-    "backgroundColor": "#2b2b2b",
-    "color": "#cfcfcf",
-    "fontSize": "23px",
-    "boxShadow": "5px 5px 5px 5px lightgrey"
+# Custom CSS for the sidebar
+sidebar_css = """
+<style>
+/* Change the background color of the sidebar */
+[data-testid="stSidebar"] {
+    background-color: #add8e6; /* Light blue */
+    color: black; /* Text color */
 }
 
-CONTENT_STYLE = {
-    "marginLeft": "18rem",
-    "marginRight": "2rem",
-    "padding": "2rem 1rem"
+/* Customize the font and padding of the sidebar elements */
+[data-testid="stSidebar"] .css-1d391kg {
+    font-size: 18px;
+    padding: 10px;
 }
 
-sidebar = html.Div(
-    [
-        html.H1(f"Search Tool", style={'fontSize': '36px', 'fontWeight': 'bold'}),
-        html.Hr(),
-        html.H2(f"Enter articles URLs", className="lead", style={'fontSize': '28px'}),
-        html.Hr(),
-        dbc.Nav([
-            html.Div([dcc.Input(
-                id=f"input-box-{i}",
-                type="text",
-                placeholder=f"Enter URL {i + 1}",
-                value="https://www.moneycontrol.com/news/business/markets/coronavirus-pandemic-markets-set-to-feel-the-heat-for-some-time-5026501.html",
-                style={'marginTop': '10px'}
-            ) for i in range(NUMBER_OF_INPUTS)]),
-            html.Button('Submit', id='submit-button', n_clicks=0, style={'width': '50%', 'margin': '20px auto'})
-        ],
-        vertical=True,
-        pills=True,
-        )
-    ],
-    style=SIDEBAR_STYLE
-)
+[data-testid="stAppViewContainer"] {
+    background-color: #f0f8ff;
+}
+[data-testid="stHeader"] {
+    background-color: #f0f8ff;
+}
+[data-testid="stHeadingWithActionElements"] {
+    text-align: center
+}
+[data-testid="stMarkdownContainer"] {
+    font-size: 20px
+}
+[data-testid="stMarkdownContainer"] h1 {
+    text-align: center;
+}
+[data-testid="stButton"] {
+    text-align: center;
+}
+[data-testid="stButton"] button {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    font-weight: 600;
+    background-color: green;
+    color: white;
+    transition: transform 0.3s ease;
+    margin-top: 20px;
+}
+[data-testid="stBaseButton-secondary"]:hover {
+    border-color: white;
+    color: white;
+    transform: scale(1.1);
+}
+textarea::placeholder {
+    font-size: 20px;
+}
+[data-testid="stVerticalBlock"] {
+    gap: 0;
+}
+[data-testid="stSpinner"] {
+    margin-top: 60px;
+}
+[data-testid="stSpinner"] p {
+    font-size: 28px;
+}
+.stMainBlockContainer [data-testid="stElementContainer"] [data-testid="stTextInputRootElement"] {
+    height: 80px;
+}
+.stMainBlockContainer [data-testid="stElementContainer"] [data-testid="stTextInputRootElement"] input {
+    padding: 25px;
+    height: 50px;
+    font-size: 24px;
+    box-sizing: border-box;
+}
+</style>
+"""
 
-app =  Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+# Inject the custom CSS
+st.markdown(sidebar_css, unsafe_allow_html=True)
 
-content  = html.Div([
-    html.Div(
-        id="messages-div", 
-        style={"border": "1px solid black", "padding": "10px", "marginTop": "10px"}),
-    html.Div(
-        id="page-content", 
-        children=[html.H1("Search Tool 🔎")], 
-        style=CONTENT_STYLE
-    ),
-    dcc.Store(id="process-step", data=0),
-    dcc.Interval(
-        id="process-interval", 
-        interval=1000, 
-        n_intervals=0, 
-        disabled=True
-    ),
-])
+st.title("Search Tool 🔎")
+st.sidebar.title("Enter URLs for Context & press GO")
 
-app.layout = html.Div(
-    [
-        sidebar, 
-        content
-    ]
-)
+urls = []
+for i in range(3):
+    url = st.sidebar.text_input("", placeholder=f"Context URL {i+1}")
+    urls.append(url)
 
-file_path = "faiss_file.pkl"
+clicked = st.sidebar.button("GO")
+
+main_placeholder = st.empty()
 llm = OpenAI(temperature=0.9, max_tokens=500)
+processed = 1
+file_path = "faiss_store_openai.pkl"
 
-@app.callback(
-    [
-        Output('messages-div', 'children'),
-        Output('page-content', 'children'),
-        Output("process-step", "data")
-    ],
-    Input('submit-button', 'n_clicks'),
-    [
-        State('process-step', 'data'),
-        State('messages-div', 'children')
-    ],
-    [State(f'input-box-{i}', 'value') for i in range(NUMBER_OF_INPUTS)]
-)
-def update_output(
-    n_clicks, 
-    current_step, 
-    current_children,
-    *values):
-    if n_clicks > 0:
-        if not isinstance(current_messages, list):
-            current_messages = []
-
-        # current_messages.append(html.Div(steps[current_step]))
-        
-        # load data
-        loader = UnstructuredURLLoader(values)
+if clicked:
+    # processed = 0
+    loader = UnstructuredURLLoader(urls=urls)
+    with st.spinner("Loading data from the URLs 🏃‍➡️"):
         data = loader.load()
-
-        current_children.append(
-            html.Div('Text Splitter Started...⌛⌛⌛')
-        )
-        # split data
+        time.sleep(2)
+    with st.spinner("Recursively splitting the text 🏃‍➡️🏃‍➡️"):
         text_splitter = RecursiveCharacterTextSplitter(
             separators=['\n\n', '\n', '.', ','],
-            chunk_size=1000
+            chunk_size=500
         )
         docs = text_splitter.split_documents(data)
-
-        # create embeddings and save it to FAISS index
+        time.sleep(2)
+    with st.spinner("Preparing embeddings and vector database 🏃‍➡️🏃‍➡️🏃‍➡️"):
         embeddings = OpenAIEmbeddings()
         vectorstore_openai = FAISS.from_documents(docs, embeddings)
-        
-        current_children.append(html.Div('Embedding Vector Started...⌛⌛⌛'))
         time.sleep(2)
 
-        # save the FAISS index to a pickle file
-        with open(file_path, "wb") as f:
-            pickle.dump(vectorstore_openai, f)
-        
-        # ===== Added the place holder of `Question: `
-        if query:
-            if os.path.exists(file_path):
-                with open(file_path, "rb") as f:
-                    vectorstore = pickle.load(f)
-                    chain = RetrievalQAWithSourcesChain.from_llm(llm=llm, retriever=vectorstore.as_retriever)
-    return current_children, values, current_step + 1
+    with open(file_path, "wb") as f:
+        vectorstore_openai.save_local("faiss_index")
+        # processed = 1
 
-if __name__ == '__main__':
-    app.run(debug=True)
+if (processed == 1):
+    query = main_placeholder.text_input(
+        "", 
+        placeholder="Message Search Tool"
+    )
+
+    if query:
+        if os.path.exists(file_path):
+            with open(file_path, "rb") as f:
+                vectorstore = FAISS.load_local(
+                    "faiss_index", OpenAIEmbeddings(), allow_dangerous_deserialization=True
+                )
+                chain = RetrievalQAWithSourcesChain.from_llm(
+                    llm=llm, 
+                    retriever=vectorstore.as_retriever()
+                )
+                result = chain(
+                    {"question": query}, 
+                    return_only_outputs=True
+                )
+
+                st.header("Reply")
+                st.write(result["answer"])
+
+                # Displaying sources
+                sources = result.get("sources", "")
+                if sources:
+                    st.subheader("Sources:")
+                    sources_list = sources.split("\n")
+
+                    for source in sources_list:
+                        st.write(source)

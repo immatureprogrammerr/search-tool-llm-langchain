@@ -9,3 +9,5 @@ tiktoken==0.4.0
 faiss-cpu==1.7.4
 libmagic==1.0
 python-magic==0.4.27
+ython-magic-bin==0.4.14
+OpenAI == 0.28.0
