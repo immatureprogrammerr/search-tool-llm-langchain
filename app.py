@@ -8,6 +8,9 @@ from langchain_community.document_loaders import UnstructuredURLLoader
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
 
+# Set the page title
+st.set_page_config(page_title="LLM Search Tool")
+
 from dotenv import load_dotenv
 load_dotenv()
 # Custom CSS for the sidebar
